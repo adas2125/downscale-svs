@@ -5,6 +5,10 @@ const upperThreshold = 230;
 const FILENAME_FIELD_IN_LABELS_CSV = "HALO_image_link"
 const LABEL_FIELD_IN_LABELS_CSV = "cat1"
 
+let database = []
+let databaseX = []
+let databaseY = []
+
 const gcsUploadAPIPath = "https://us-east4-dl-test-tma.cloudfunctions.net/gcs-upload"
 const gcsFolderName = "test-folder"
 
@@ -203,8 +207,9 @@ const onFileSelectionChange = (accessToken, files) => {
         loaderDiv.innerHTML += '<div class="loader"></div>';
         document.body.appendChild(loaderDiv);
         const fileId = select.value;
-        tileHandle(accessToken, fileId, files);
+        tileHandle(accessToken, fileId, files)
     })
+    
 }
 
 const tileHandle = async (accessToken, fileId, files) => {
@@ -405,6 +410,7 @@ const canvasHandler = (blob, fileName, desiredResolution, thumbnailDiv, smallerI
             thumbnailDiv.appendChild(canvas);
             resolve(true);
         }
+        
     })
     
 }
@@ -560,6 +566,7 @@ const extractRandomTile = async ([tilex, tiley], widthIncrements, heightIncremen
             imageDiv.appendChild(tileContainer);
             resolve(true)
         }
+
     })
 }
 
@@ -582,6 +589,7 @@ const canvasEvents = () => {
                 document.getElementById('uploadImage').innerHTML = `Upload all tiles to:`;
         });
     });
+    addToDatabase(database)
 }
 
 const generateXYs = (rows, cols, height, width) => {
@@ -729,6 +737,160 @@ const uploadNewVersion = async (accessToken, fileId, formData) => {
     });
 }
 
+function addToDatabase(data) {
+    let X = document.getElementsByClassName('tile-thumbnail-selected uploadCanvas tile-thumbnail') || null;
+    for (let i = 0; i < X.length; i++) {
+        X[i].toBlob(function(blob) {
+            data.push({'URL': URL.createObjectURL(blob), 'Class': X[i].getAttribute('data-label')})
+        })
+    }
+    console.log(database)
+}
+
+
+function getSimpleModel() {
+    let model = tf.sequential();
+    const IMAGE_WIDTH = 256; 
+    const IMAGE_HEIGHT = 256; 
+    const IMAGE_CHANNELS = 3;
+
+    model.add( tf.layers.conv2d({ inputShape: [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_CHANNELS], 
+        kernelSize: 3, filters: 8, activation: 'relu' }));
+    
+    model.add( tf.layers.conv2d({kernelSize: 3, filters: 16, activation: 'relu'}) );
+    
+    model.add(tf.layers.maxPooling2d({poolSize: 2, strides: 2}))
+
+    model.add(tf.layers.flatten({}));
+
+    model.add(tf.layers.dense({units: 1, activation: 'sigmoid'}));
+
+    model.compile({
+        optimizer: 'adam',
+        loss: 'binaryCrossentropy',
+        metrics: ['accuracy']
+    })
+
+    return model;
+    
+    
+}
+
+
+function getModel() { 
+    let model = tf.sequential();
+    const IMAGE_WIDTH = 256; 
+    const IMAGE_HEIGHT = 256; 
+    const IMAGE_CHANNELS = 3;
+
+    model.add( tf.layers.conv2d({ inputShape: [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_CHANNELS], 
+        kernelSize: 3, filters: 8, activation: 'relu' }));
+    
+    model.add( tf.layers.conv2d({kernelSize: 3, filters: 16, activation: 'relu'}) );
+    
+    model.add(tf.layers.maxPooling2d({poolSize: 2, strides: 2}))
+    
+    model.add( tf.layers.conv2d({kernelSize: 3, filters: 32, activation: 'relu'}) );
+    model.add( tf.layers.conv2d({kernelSize: 3, filters: 48, activation: 'relu'}) );
+    model.add( tf.layers.conv2d({kernelSize: 3, filters: 64, activation: 'relu'}) );
+    
+    model.add(tf.layers.maxPooling2d({poolSize: 2, strides: 2}));
+    
+    model.add(tf.layers.flatten({}));
+    model.add(tf.layers.dense({units: 28, activation: 'relu'}));
+    model.add(tf.layers.dense({units: 1, activation: 'sigmoid'}));
+    
+    model.compile({
+        optimizer: 'adam',
+        loss: 'binaryCrossentropy',
+        metrics: ['accuracy']
+    })
+
+    return model;
+}
+
+// Source: https://www.geeksforgeeks.org/how-to-shuffle-an-array-using-javascript/
+function shuffleArray(array) {
+    for (var i = array.length - 1; i > 0; i--) {
+    
+        // Generate random number
+        var j = Math.floor(Math.random() * (i + 1));
+                    
+        var temp = array[i];
+        array[i] = array[j];
+        array[j] = temp;
+    }        
+    return array;
+ }
+
+ function imageToTensor(URL) {
+    return new Promise((resolve, reject) => {
+        let image = new Image();
+        image.src = URL
+        image.onload = () => {
+            let tensor = tf.browser.fromPixels(image);
+            resolve(databaseX.push(tensor))
+        }
+    })
+ }
+
+// Source: TensorFlow Tutorials
+ async function loadMobileNet() {
+    const URL = 'https://tfhub.dev/google/tfjs-model/imagenet/mobilenet_v3_small_100_224/feature_vector/5/default/1';
+    let mobilenet = await tf.loadGraphModel(URL, {fromTFHub: true});
+    return mobilenet;
+ }
+
+var button = document.getElementById('train');
+button.onclick = async function () {
+    database = shuffleArray(database);
+    
+    // Populating databaseY
+    for (let i = 0; i < database.length; i++) {
+        if (database[i].Class === 'POT1') {
+            databaseY.push(1)
+        } else {
+            databaseY.push(0)
+        }  
+    }
+
+    // Populating databaseX
+    for (let i = 0; i < database.length; i++) {
+        await imageToTensor(database[i].URL)
+    }
+
+    console.log(database);
+    console.log(databaseX);
+    console.log(databaseY);
+
+    // Obtaining model
+    let model = getModel();
+    model.summary()
+
+    let sum = databaseY.reduce((pSum, a) => pSum + a, 0)
+    alert(`The database you created has ${database.length} elements,
+    ${sum} elements belonging to POT1, and ${database.length-sum} belonging to NON-POT1`)
+
+    // For training visualizations
+    const metrics = ['loss', 'val_loss', 'acc', 'val_acc'];
+    const container = {
+        name: 'Model Training', tab: 'Model', styles: { height: '1000px' }
+    };
+    const fitCallbacks = tfvis.show.fitCallbacks(container, metrics);
+    // Fitting the model
+    let results = await model.fit(tf.stack(databaseX), tf.stack(databaseY), {
+        epochs: 10,
+        batchSize: 5,
+        validationSplit: 0.2,
+        shuffle: true,
+        callbacks: fitCallbacks
+    })
+
+
+    console.log(results.history.acc)
+}
+
 window.onload = () => {
     initialize();
 }
+
